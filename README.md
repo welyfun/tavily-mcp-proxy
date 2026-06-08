@@ -26,6 +26,12 @@ ACCESS_KEYS=my-secret-key
 PORT=3000
 ```
 
+Generate a secure access key / 生成一个安全的访问密钥:
+
+```bash
+python3 generate-key.py
+```
+
 ### Docker
 
 ```bash
