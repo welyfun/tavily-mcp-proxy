@@ -1,0 +1,9 @@
+services:
+  tavily-mcp:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      TAVILY_API_KEYS: tvly-key1,tvly-key2
+      ACCESS_KEYS: my-access-key
+    restart: always
