@@ -14,7 +14,7 @@ Tavily MCP Proxy - Search via Tavily MCP with multiple keys, randomly selecting 
 ## Quick Start / 快速开始
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/welyfun/tavily-mcp-proxy.git
 cd tavily-mcp-proxy
 ```
 
@@ -35,7 +35,7 @@ python3 generate-key.py
 ### Docker
 
 ```bash
-docker compose up --build -d
+docker compose up -d
 ```
 
 ### Local Dev / 本地开发
