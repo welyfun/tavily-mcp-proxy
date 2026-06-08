@@ -92,7 +92,7 @@ Extract web page content from one or more URLs using Tavily Extract API. Metadat
 [mcp_servers.tavily]
 url = "http://localhost:3000/mcp"
 http_headers = { "Authorization" = "Bearer my-secret-key" }
-approval_mode = "approve"
+default_tools_approval_mode = "approve"
 ```
 
 ## License
