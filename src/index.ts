@@ -268,7 +268,7 @@ function startSSE(onConnected) {
         return reader.read().then(function (r) {
           if (r.done) return true;
           buf += decoder.decode(r.value, { stream: true });
-          var parts = buf.split("\n");
+          var parts = buf.split("\\n");
           buf = parts.pop();
           for (var i = 0; i < parts.length; i++) {
             var line = parts[i];
