@@ -231,14 +231,13 @@ function doLogin() {
   btn.textContent = "\u9a8c\u8bc1\u4e2d...";
   btn.disabled = true;
   accessKey = key;
-  startSSE().then(function (ok) {
+  startSSE(function (ok) {
     if (ok) {
       document.getElementById("loginModal").classList.add("hidden");
     } else {
       accessKey = "";
       errEl.textContent = "\u5bc6\u94a5\u65e0\u6548";
     }
-  }).finally(function () {
     btn.textContent = "\u786e\u8ba4";
     btn.disabled = false;
   });
@@ -248,16 +247,17 @@ function disconnectSSE() {
   if (sseAbort) { sseAbort.abort(); sseAbort = null; }
 }
 
-function startSSE() {
+function startSSE(onConnected) {
   disconnectSSE();
   sseAbort = new AbortController();
   var signal = sseAbort.signal;
   var headers = {};
   if (accessKey) headers["Authorization"] = "Bearer " + accessKey;
 
-  return fetch("/api/usage/stream", { headers: headers, signal: signal })
+  fetch("/api/usage/stream", { headers: headers, signal: signal })
     .then(function (res) {
-      if (!res.ok) return false;
+      if (!res.ok) { if (onConnected) onConnected(false); return; }
+      if (onConnected) onConnected(true);
       keyData = {}; prefixList = []; fetchedCount = 0;
       var reader = res.body.getReader();
       var decoder = new TextDecoder();
@@ -285,7 +285,7 @@ function startSSE() {
         });
       }
       return pump();
-    }).catch(function () { return false; });
+    }).catch(function () {});
 }
 
 function handleEvent(evt, data) {
@@ -337,7 +337,7 @@ function refresh() {
   var btn = document.getElementById("refreshBtn");
   btn.disabled = true;
   btn.textContent = "\u5237\u65b0\u4e2d...";
-  startSSE();
+  startSSE(null);
 }
 
 function toggleAutoRefresh() {
