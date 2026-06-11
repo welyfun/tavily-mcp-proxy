@@ -1,3 +1,4 @@
+import { logInfo, logError, keyPreview } from "./logger.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import crypto from "node:crypto";
@@ -51,7 +52,10 @@ export function createServer(): McpServer {
     async (args: any) => {
       const { query } = args as { query: string };
       const apiKey = pickRandomKey();
+      logInfo("tavily_search called", { query, key: keyPreview(apiKey) });
+
       const body = { query, max_results: 10 };
+      const startTime = Date.now();
 
       const res = await fetch(TAVILY_API_BASE + "/search", {
         method: "POST",
@@ -62,13 +66,21 @@ export function createServer(): McpServer {
         body: JSON.stringify(body),
       });
 
+      const elapsed = Date.now() - startTime;
+
       if (!res.ok) {
         const errorText = await res.text();
-        throw new Error("Tavily Search API error (" + res.status + "): " + errorText);
+        const msg = `Tavily Search API error (${res.status}): ${errorText}`;
+        logError("tavily_search failed", new Error(msg));
+        throw new Error(msg);
       }
 
       const data = await res.json();
       const sanitized = sanitizeSearchResponse(data);
+
+      const resultCount = Array.isArray(sanitized.results) ? sanitized.results.length : 0;
+      logInfo("tavily_search done", { status: res.status, elapsed: elapsed + "ms", results: resultCount });
+
       return { content: [{ type: "text" as const, text: JSON.stringify(sanitized) }] };
     }
   );
@@ -84,7 +96,10 @@ export function createServer(): McpServer {
       const { urls } = args as { urls: string | string[] };
       const apiKey = pickRandomKey();
       const urlsArray = Array.isArray(urls) ? urls : [urls];
+      logInfo("tavily_extract called", { urls: urlsArray, key: keyPreview(apiKey) });
+
       const body = { urls: urlsArray };
+      const startTime = Date.now();
 
       const res = await fetch(TAVILY_API_BASE + "/extract", {
         method: "POST",
@@ -95,13 +110,22 @@ export function createServer(): McpServer {
         body: JSON.stringify(body),
       });
 
+      const elapsed = Date.now() - startTime;
+
       if (!res.ok) {
         const errorText = await res.text();
-        throw new Error("Tavily Extract API error (" + res.status + "): " + errorText);
+        const msg = `Tavily Extract API error (${res.status}): ${errorText}`;
+        logError("tavily_extract failed", new Error(msg));
+        throw new Error(msg);
       }
 
       const data = await res.json();
       const sanitized = sanitizeExtractResponse(data);
+
+      const successCount = Array.isArray(sanitized.results) ? sanitized.results.length : 0;
+      const failCount = Array.isArray(sanitized.failed_results) ? sanitized.failed_results.length : 0;
+      logInfo("tavily_extract done", { status: res.status, elapsed: elapsed + "ms", success: successCount, failed: failCount });
+
       return { content: [{ type: "text" as const, text: JSON.stringify(sanitized) }] };
     }
   );

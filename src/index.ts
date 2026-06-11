@@ -2,6 +2,7 @@ import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "./server.js";
+import { logInfo, logError, keyPreview } from "./logger.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ACCESS_KEYS = (process.env.ACCESS_KEYS || "")
@@ -11,6 +12,15 @@ const ACCESS_KEYS = (process.env.ACCESS_KEYS || "")
 
 const TAVILY_API_BASE = "https://api.tavily.com";
 
+function requestLogger(req: Request, res: Response, next: NextFunction): void {
+  const start = Date.now();
+  res.on("finish", () => {
+    const elapsed = Date.now() - start;
+    logInfo("http", { method: req.method, path: req.path, status: res.statusCode, elapsed: elapsed + "ms" });
+  });
+  next();
+}
+
 function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (ACCESS_KEYS.length === 0) {
     next();
@@ -18,11 +28,13 @@ function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   }
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    logInfo("auth rejected: missing or invalid Authorization header", { path: req.path, ip: req.ip });
     res.status(401).json({ error: "Missing or invalid Authorization header" });
     return;
   }
   const token = authHeader.slice(7);
   if (!ACCESS_KEYS.includes(token)) {
+    logInfo("auth rejected: invalid access key", { path: req.path, ip: req.ip, key: keyPreview(token) });
     res.status(401).json({ error: "Invalid access key" });
     return;
   }
@@ -56,7 +68,7 @@ async function fetchAllUsage(): Promise<UsageResponse> {
       await delay(500);
     }
 
-    const prefix = apiKey.length > 8 ? apiKey.slice(0, 8) + "..." : apiKey;
+    const prefix = keyPreview(apiKey);
 
     try {
       const res = await fetch(TAVILY_API_BASE + "/usage", {
@@ -401,23 +413,29 @@ function esc(s) {
 async function main(): Promise<void> {
   const keys = process.env.TAVILY_API_KEYS || "";
   if (!keys.split(",").map(k => k.trim()).filter(Boolean).length) {
-    console.error("FATAL: TAVILY_API_KEYS must contain at least one API key");
+    logError("FATAL: TAVILY_API_KEYS must contain at least one API key");
     process.exit(1);
   }
 
   const app = express();
   app.use(express.json());
+  app.use(requestLogger);
 
   app.get("/health", (_req: Request, res: Response) => {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/usage", authMiddleware, async (_req: Request, res: Response) => {
+  app.get("/api/usage", authMiddleware, async (req: Request, res: Response) => {
+    const authed = ACCESS_KEYS.length === 0 || !!req.headers.authorization;
+    logInfo("usage requested", { authed });
     try {
       const data = await fetchAllUsage();
+      const keyCount = data.keys ? data.keys.length : 0;
+      logInfo("usage fetched", { keys: keyCount });
       res.json(data);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      logError("usage fetch error", err instanceof Error ? err : new Error(message));
       res.status(500).json({ error: "Failed to fetch usage: " + message });
     }
   });
@@ -427,18 +445,21 @@ async function main(): Promise<void> {
   });
 
   app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
+    logInfo("mcp session started");
     try {
       const server = createServer();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
       res.on("close", () => {
+        logInfo("mcp session closed");
         transport.close();
         server.close();
       });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
+      logError("mcp handler error", error);
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: "2.0",
@@ -449,14 +470,25 @@ async function main(): Promise<void> {
     }
   });
 
+  process.on("uncaughtException", (err) => {
+    logError("uncaught exception", err);
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    logError("unhandled rejection", reason instanceof Error ? reason : new Error(String(reason)));
+  });
+
   app.listen(PORT, () => {
-    console.log("tavily-mcp-proxy running on http://0.0.0.0:" + PORT + "/mcp");
-    console.log("Usage page: http://0.0.0.0:" + PORT + "/usage");
-    console.log("Access keys configured: " + (ACCESS_KEYS.length > 0 ? ACCESS_KEYS.length : "none (open)"));
+    logInfo("server started", { port: PORT });
+    logInfo("MCP endpoint: http://0.0.0.0:" + PORT + "/mcp");
+    logInfo("Usage page: http://0.0.0.0:" + PORT + "/usage");
+    logInfo("Access keys configured: " + (ACCESS_KEYS.length > 0 ? ACCESS_KEYS.length : "none (open)"));
+    logInfo("LOG_LEVEL: " + (process.env.LOG_LEVEL || "info"));
   });
 }
 
 main().catch((err) => {
-  console.error("Fatal startup error:", err);
+  logError("fatal startup error", err);
   process.exit(1);
 });
