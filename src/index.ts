@@ -191,10 +191,6 @@ body {
       <button id="logoutBtn" style="display:none">退出登录</button>
       <span id="fetchTime">--</span>
       <button id="refreshBtn">刷新</button>
-      <label>
-        <input type="checkbox" id="autoRefreshCheck" />
-        自动刷新 (60s)
-      </label>
     </div>
   </div>
   <div class="container" id="content"></div>
@@ -202,7 +198,6 @@ body {
 
 <script>
 var accessKey = "";
-var autoRefreshTimer = null;
 
 
 
@@ -236,7 +231,6 @@ document.addEventListener("DOMContentLoaded", function () {
     if (e.key === "Enter") doLogin();
   });
   document.getElementById("refreshBtn").addEventListener("click", refresh);
-  document.getElementById("autoRefreshCheck").addEventListener("change", toggleAutoRefresh);
   document.getElementById("logoutBtn").addEventListener("click", doLogout);
 });
 
@@ -275,8 +269,6 @@ function doLogout() {
   document.getElementById("accessKeyInput").value = "";
   document.getElementById("accessKeyInput").focus();
   document.getElementById("loginError").textContent = "";
-  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
-  document.getElementById("autoRefreshCheck").checked = false;
 }
 
 function disconnectSSE() {
@@ -374,15 +366,6 @@ function refresh() {
   btn.disabled = true;
   btn.textContent = "\u5237\u65b0\u4e2d...";
   startSSE(null);
-}
-
-function toggleAutoRefresh() {
-  if (document.getElementById("autoRefreshCheck").checked) {
-    refresh();
-    autoRefreshTimer = setInterval(refresh, 60000);
-  } else {
-    if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
-  }
 }
 
 function updateFetchTime(iso) {

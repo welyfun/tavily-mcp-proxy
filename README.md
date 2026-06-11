@@ -36,7 +36,7 @@ python3 generate-key.py
 ### Docker
 
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
 ### Local Dev / 本地开发
