@@ -188,6 +188,7 @@ body {
   <div class="header">
     <h1>Tavily Usage</h1>
     <div class="header-controls">
+      <button id="logoutBtn" style="display:none">退出登录</button>
       <span id="fetchTime">--</span>
       <button id="refreshBtn">刷新</button>
       <label>
@@ -212,14 +213,31 @@ var fetchedCount = 0;
 
 document.addEventListener("DOMContentLoaded", function () {
   var input = document.getElementById("accessKeyInput");
-  input.focus();
-  document.getElementById("loginModal").classList.remove("hidden");
+  var storedKey = localStorage.getItem("tavily_access_key");
+  if (storedKey) {
+    accessKey = storedKey;
+    document.getElementById("loginModal").classList.add("hidden");
+    document.getElementById("logoutBtn").style.display = "";
+    startSSE(function (ok) {
+      if (!ok) {
+        localStorage.removeItem("tavily_access_key");
+        accessKey = "";
+        document.getElementById("logoutBtn").style.display = "none";
+        document.getElementById("loginModal").classList.remove("hidden");
+        input.focus();
+      }
+    });
+  } else {
+    input.focus();
+    document.getElementById("loginModal").classList.remove("hidden");
+  }
   document.getElementById("loginBtn").addEventListener("click", doLogin);
   input.addEventListener("keydown", function (e) {
     if (e.key === "Enter") doLogin();
   });
   document.getElementById("refreshBtn").addEventListener("click", refresh);
   document.getElementById("autoRefreshCheck").addEventListener("change", toggleAutoRefresh);
+  document.getElementById("logoutBtn").addEventListener("click", doLogout);
 });
 
 function doLogin() {
@@ -233,14 +251,32 @@ function doLogin() {
   accessKey = key;
   startSSE(function (ok) {
     if (ok) {
+      localStorage.setItem("tavily_access_key", key);
       document.getElementById("loginModal").classList.add("hidden");
+      document.getElementById("logoutBtn").style.display = "";
     } else {
+      localStorage.removeItem("tavily_access_key");
       accessKey = "";
       errEl.textContent = "\u5bc6\u94a5\u65e0\u6548";
     }
     btn.textContent = "\u786e\u8ba4";
     btn.disabled = false;
   });
+}
+
+function doLogout() {
+  disconnectSSE();
+  localStorage.removeItem("tavily_access_key");
+  accessKey = "";
+  document.getElementById("logoutBtn").style.display = "none";
+  document.getElementById("content").innerHTML = "";
+  document.getElementById("fetchTime").textContent = "--";
+  document.getElementById("loginModal").classList.remove("hidden");
+  document.getElementById("accessKeyInput").value = "";
+  document.getElementById("accessKeyInput").focus();
+  document.getElementById("loginError").textContent = "";
+  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+  document.getElementById("autoRefreshCheck").checked = false;
 }
 
 function disconnectSSE() {
