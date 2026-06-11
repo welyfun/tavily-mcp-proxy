@@ -508,7 +508,7 @@ async function main(): Promise<void> {
     res.end();
   });
 
-  app.get("/usage", (_req: Request, res: Response) => {
+  app.get("/", (_req: Request, res: Response) => {
     res.type("html").send(USAGE_PAGE_HTML);
   });
 
@@ -550,7 +550,7 @@ async function main(): Promise<void> {
   app.listen(PORT, () => {
     logInfo("server started", { port: PORT });
     logInfo("MCP endpoint: http://0.0.0.0:" + PORT + "/mcp");
-    logInfo("Usage page: http://0.0.0.0:" + PORT + "/usage");
+    logInfo("Usage page: http://0.0.0.0:" + PORT + "/");
     logInfo("Access keys configured: " + (ACCESS_KEYS.length > 0 ? ACCESS_KEYS.length : "none (open)"));
     logInfo("LOG_LEVEL: " + (process.env.LOG_LEVEL || "info"));
   });
