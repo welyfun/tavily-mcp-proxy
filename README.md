@@ -9,6 +9,7 @@ Tavily MCP Proxy - Search via Tavily MCP with multiple keys, randomly selecting 
 - 🐳 Docker-deployable Streamable HTTP MCP server / 支持 Docker 部署的 Streamable HTTP MCP 服务
 - 🔑 Multiple Tavily API keys with random rotation / 多 Tavily API Key 随机轮换
 - 🔒 Bearer token authentication for access control / Bearer Token 访问认证
+- 📊 Real-time usage dashboard at `/usage` / 实时用量面板 `/usage`
 - 🔍 `tavily_search` and `tavily_extract` tools / 包含 `tavily_search` 和 `tavily_extract` 两个工具
 
 ## Quick Start / 快速开始
@@ -44,6 +45,18 @@ docker compose up -d
 npm install
 npm run dev
 ```
+
+## Usage Page / 用量面板
+
+Visit `http://localhost:3000/usage` to view real-time API key usage. / 访问 `http://localhost:3000/usage` 查看实时 API Key 用量。
+
+- Enter your access key to log in / 输入访问密钥登录
+- Usage data streams in as each key is fetched / 用量数据流式加载，逐个 Key 显示
+- Progress bar shows overall fetch status / 进度条显示整体获取进度
+- Each key card shows both key-level and account-level usage / 每个 Key 卡片展示 Key 级别和账户级别用量
+- Key usage bars default to plan limit when key limit is not set / Key 用量条上限未设置时默认使用计划上限
+- Auto-refresh available (60s interval) / 支持自动刷新（60 秒间隔）
+
 
 ## Configuration / 配置项
 

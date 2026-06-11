@@ -41,58 +41,6 @@ function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-interface UsageKeyEntry {
-  prefix: string;
-  key?: Record<string, unknown>;
-  account?: Record<string, unknown>;
-  error?: string;
-}
-
-interface UsageResponse {
-  keys: UsageKeyEntry[];
-  fetchedAt: string;
-}
-
-async function fetchAllUsage(): Promise<UsageResponse> {
-  const rawKeys = process.env.TAVILY_API_KEYS || "";
-  const keys = rawKeys.split(",").map(k => k.trim()).filter(Boolean);
-  const results: UsageKeyEntry[] = [];
-
-  for (let i = 0; i < keys.length; i++) {
-    const apiKey = keys[i];
-    if (i > 0) {
-      await delay(500);
-    }
-
-    const prefix = keyPreview(apiKey);
-
-    try {
-      const res = await fetch(TAVILY_API_BASE + "/usage", {
-        method: "GET",
-        headers: { Authorization: "Bearer " + apiKey },
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        results.push({ prefix, error: `HTTP ${res.status}: ${text.slice(0, 200)}` });
-        continue;
-      }
-
-      const data = await res.json() as { key?: Record<string, unknown>; account?: Record<string, unknown> };
-      results.push({ prefix, key: data.key, account: data.account });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      results.push({ prefix, error: message });
-    }
-  }
-
-  return { keys: results, fetchedAt: new Date().toISOString() };
-}
-
 const USAGE_PAGE_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -192,12 +140,36 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.skeleton {
+  background: linear-gradient(90deg, #eee 25%, #f5f5f5 50%, #eee 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .stat-row {
   display: flex; justify-content: space-between; align-items: center;
   font-size: 13px; padding: 4px 0;
 }
 .stat-row .stat-name { color: #888; }
 .stat-row .stat-value { color: #333; font-weight: 500; }
+
+.progress-bar-wrap {
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 16px 24px; margin-bottom: 20px;
+  display: flex; align-items: center; gap: 14px;
+}
+.progress-bar-wrap .label { font-size: 13px; color: #666; white-space: nowrap; }
+.progress-bar-wrap .bar-outer {
+  flex: 1; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden;
+}
+.progress-bar-wrap .bar-inner {
+  height: 100%; background: #3b82f6; border-radius: 4px; transition: width 0.3s ease;
+}
+.progress-bar-wrap .count { font-size: 12px; color: #888; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -231,99 +203,141 @@ body {
 var accessKey = "";
 var autoRefreshTimer = null;
 
+
+
+var sseAbort = null;
+var keyData = {};
+var prefixList = [];
+var fetchedCount = 0;
+
 document.addEventListener("DOMContentLoaded", function () {
   var input = document.getElementById("accessKeyInput");
   input.focus();
-
-  // Try without auth first
-  fetch("/api/usage")
-    .then(function (res) {
-      if (res.ok) {
-        document.getElementById("loginModal").classList.add("hidden");
-        return res.json();
-      }
-      return Promise.reject("auth required");
-    })
-    .then(function (data) {
-      updateFetchTime(data.fetchedAt);
-      renderUsage(data);
-    })
-    .catch(function () {
-      // Auth required or network error — keep modal visible
-      document.getElementById("loginModal").classList.remove("hidden");
-    });
-
-  // Login button
+  document.getElementById("loginModal").classList.remove("hidden");
   document.getElementById("loginBtn").addEventListener("click", doLogin);
   input.addEventListener("keydown", function (e) {
     if (e.key === "Enter") doLogin();
   });
-
-  // Refresh button
   document.getElementById("refreshBtn").addEventListener("click", refresh);
-
-  // Auto refresh toggle
   document.getElementById("autoRefreshCheck").addEventListener("change", toggleAutoRefresh);
 });
 
 function doLogin() {
   var key = document.getElementById("accessKeyInput").value.trim();
   var errEl = document.getElementById("loginError");
-  if (!key) { errEl.textContent = "请输入密钥"; return; }
-
+  if (!key) { errEl.textContent = "\u8bf7\u8f93\u5165\u5bc6\u94a5"; return; }
   errEl.textContent = "";
   var btn = document.getElementById("loginBtn");
-  btn.textContent = "验证中...";
+  btn.textContent = "\u9a8c\u8bc1\u4e2d...";
   btn.disabled = true;
-
-  fetch("/api/usage", { headers: { Authorization: "Bearer " + key } })
-    .then(function (res) {
-      if (!res.ok) throw new Error("invalid");
-      return res.json();
-    })
-    .then(function (data) {
-      accessKey = key;
+  accessKey = key;
+  startSSE().then(function (ok) {
+    if (ok) {
       document.getElementById("loginModal").classList.add("hidden");
-      updateFetchTime(data.fetchedAt);
-      renderUsage(data);
-    })
-    .catch(function () {
-      errEl.textContent = "密钥无效";
-    })
-    .finally(function () {
-      btn.textContent = "确认";
-      btn.disabled = false;
-    });
+    } else {
+      accessKey = "";
+      errEl.textContent = "\u5bc6\u94a5\u65e0\u6548";
+    }
+  }).finally(function () {
+    btn.textContent = "\u786e\u8ba4";
+    btn.disabled = false;
+  });
 }
 
-function fetchUsage() {
+function disconnectSSE() {
+  if (sseAbort) { sseAbort.abort(); sseAbort = null; }
+}
+
+function startSSE() {
+  disconnectSSE();
+  sseAbort = new AbortController();
+  var signal = sseAbort.signal;
   var headers = {};
   if (accessKey) headers["Authorization"] = "Bearer " + accessKey;
-  return fetch("/api/usage", { headers: headers }).then(function (res) {
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    return res.json();
-  });
+
+  return fetch("/api/usage/stream", { headers: headers, signal: signal })
+    .then(function (res) {
+      if (!res.ok) return false;
+      keyData = {}; prefixList = []; fetchedCount = 0;
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = "";
+      var evt = "";
+
+      function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) return true;
+          buf += decoder.decode(r.value, { stream: true });
+          var parts = buf.split("\n");
+          buf = parts.pop();
+          for (var i = 0; i < parts.length; i++) {
+            var line = parts[i];
+            if (line.startsWith("event: ")) {
+              evt = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              try {
+                handleEvent(evt, JSON.parse(line.slice(6)));
+              } catch (e) {}
+              evt = "";
+            }
+          }
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function () { return false; });
 }
 
-function loadUsage() {
-  var content = document.getElementById("content");
-  content.innerHTML = '<div class="empty-state"><span class="spinner"></span>加载中...</div>';
-  return fetchUsage().then(function (data) {
+function handleEvent(evt, data) {
+  if (evt === "init") {
+    prefixList = data.prefixes || [];
+    fetchedCount = 0;
+    renderPage();
+  } else if (evt === "usage") {
+    keyData[data.prefix] = data;
+    fetchedCount = Object.keys(keyData).length;
+    renderPage();
+  } else if (evt === "done") {
     updateFetchTime(data.fetchedAt);
-    renderUsage(data);
-  }).catch(function (err) {
-    content.innerHTML = '<div class="empty-state" style="color:#ef4444">加载失败: ' + esc(String(err.message || err)) + '</div>';
-  });
+    var btn = document.getElementById("refreshBtn");
+    btn.disabled = false;
+    btn.textContent = "\u5237\u65b0";
+  }
+}
+
+function renderPage() {
+  var content = document.getElementById("content");
+  if (prefixList.length === 0) {
+    content.innerHTML = '<div class="empty-state">\u6682\u65e0 API Key \u914d\u7f6e</div>';
+    return;
+  }
+  var total = prefixList.length;
+  var pct = total > 0 ? Math.round(fetchedCount / total * 100) : 0;
+  var html = '<div class="progress-bar-wrap">' +
+    '<span class="label">\u6b63\u5728\u83b7\u53d6 Key \u7528\u91cf</span>' +
+    '<div class="bar-outer"><div class="bar-inner" style="width:' + pct + '%"></div></div>' +
+    '<span class="count">' + fetchedCount + ' / ' + total + '</span>' +
+    '</div>';
+
+  for (var i = 0; i < prefixList.length; i++) {
+    var p = prefixList[i];
+    var d = keyData[p];
+    if (d) {
+      html += renderCard(d);
+    } else {
+      html += '<div class="key-card"><h3>' + esc(p) + '</h3>' +
+        '<div class="empty-state" style="padding:20px"><span class="spinner"></span>\u83b7\u53d6\u4e2d...</div>' +
+        '</div>';
+    }
+  }
+  content.innerHTML = html;
 }
 
 function refresh() {
   var btn = document.getElementById("refreshBtn");
   btn.disabled = true;
-  btn.textContent = "刷新中...";
-  loadUsage().finally(function () {
-    btn.disabled = false;
-    btn.textContent = "刷新";
-  });
+  btn.textContent = "\u5237\u65b0\u4e2d...";
+  startSSE();
 }
 
 function toggleAutoRefresh() {
@@ -337,8 +351,7 @@ function toggleAutoRefresh() {
 
 function updateFetchTime(iso) {
   var d = new Date(iso);
-  document.getElementById("fetchTime").textContent =
-    "刷新时间: " + d.toLocaleTimeString();
+  document.getElementById("fetchTime").textContent = "\u5237\u65b0\u65f6\u95f4: " + d.toLocaleTimeString();
 }
 
 function barColor(ratio) {
@@ -360,46 +373,30 @@ function renderBar(label, used, limit, isSub) {
 
 function renderCard(k) {
   var h = '<div class="key-card"><h3>' + esc(k.prefix) + '</h3>';
-
   if (k.error) {
     h += '<div class="error-card">' + esc(k.error) + '</div></div>';
     return h;
   }
-
-  if (k.key) {
-    h += '<div class="section-title">Key 用量</div>';
-    h += renderBar("总计", k.key.usage, k.key.limit);
-    h += renderBar("搜索", k.key.search_usage, k.key.limit, true);
-    h += renderBar("提取", k.key.extract_usage, k.key.limit, true);
-    h += renderBar("爬虫", k.key.crawl_usage, k.key.limit, true);
-    h += renderBar("地图", k.key.map_usage, k.key.limit, true);
-    h += renderBar("研究", k.key.research_usage, k.key.limit, true);
+  var data = k.data;
+  var planLimit = (data && data.account && data.account.plan_limit) ? data.account.plan_limit : 0;
+  if (data && data.key) {
+    var keyLimit = Number(data.key.limit) || planLimit;
+    h += '<div class="section-title">Key \u7528\u91cf</div>';
+    h += renderBar("\u603b\u8ba1", data.key.usage, keyLimit);
+    h += renderBar("\u641c\u7d22", data.key.search_usage, keyLimit, true);
+    h += renderBar("\u63d0\u53d6", data.key.extract_usage, keyLimit, true);
+    h += renderBar("\u722c\u866b", data.key.crawl_usage, keyLimit, true);
+    h += renderBar("\u5730\u56fe", data.key.map_usage, keyLimit, true);
+    h += renderBar("\u7814\u7a76", data.key.research_usage, keyLimit, true);
   }
-
-  if (k.account) {
-    h += '<div class="section-title">账户用量</div>';
-    h += '<div class="stat-row"><span class="stat-name">当前计划</span><span class="stat-value">' + esc(String(k.account.current_plan || "--")) + '</span></div>';
-    h += renderBar("计划", k.account.plan_usage, k.account.plan_limit);
-    h += renderBar("即用即付", k.account.paygo_usage, k.account.paygo_limit);
-    h += '<div class="section-title" style="margin-top:14px">操作明细</div>';
-    h += '<div class="stat-row"><span class="stat-name">搜索</span><span class="stat-value">' + (k.account.search_usage || 0) + '</span></div>';
-    h += '<div class="stat-row"><span class="stat-name">提取</span><span class="stat-value">' + (k.account.extract_usage || 0) + '</span></div>';
-    h += '<div class="stat-row"><span class="stat-name">爬虫</span><span class="stat-value">' + (k.account.crawl_usage || 0) + '</span></div>';
-    h += '<div class="stat-row"><span class="stat-name">地图</span><span class="stat-value">' + (k.account.map_usage || 0) + '</span></div>';
-    h += '<div class="stat-row"><span class="stat-name">研究</span><span class="stat-value">' + (k.account.research_usage || 0) + '</span></div>';
+  if (data && data.account) {
+    h += '<div class="section-title">\u8d26\u6237\u7528\u91cf</div>';
+    h += '<div class="stat-row"><span class="stat-name">\u5f53\u524d\u8ba1\u5212</span><span class="stat-value">' + esc(String(data.account.current_plan || "--")) + '</span></div>';
+    h += renderBar("\u8ba1\u5212", data.account.plan_usage, data.account.plan_limit);
+    h += renderBar("\u5373\u7528\u5373\u4ed8", data.account.paygo_usage, data.account.paygo_limit);
   }
-
   h += '</div>';
   return h;
-}
-
-function renderUsage(data) {
-  var content = document.getElementById("content");
-  if (!data.keys || data.keys.length === 0) {
-    content.innerHTML = '<div class="empty-state">暂无 API Key 配置</div>';
-    return;
-  }
-  content.innerHTML = data.keys.map(renderCard).join("");
 }
 
 function esc(s) {
@@ -425,19 +422,71 @@ async function main(): Promise<void> {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/usage", authMiddleware, async (req: Request, res: Response) => {
+  app.get("/api/usage/stream", authMiddleware, async (req: Request, res: Response) => {
+    const rawKeys = process.env.TAVILY_API_KEYS || "";
+    const keys = rawKeys.split(",").map(k => k.trim()).filter(Boolean);
+
     const authed = ACCESS_KEYS.length === 0 || !!req.headers.authorization;
-    logInfo("usage requested", { authed });
-    try {
-      const data = await fetchAllUsage();
-      const keyCount = data.keys ? data.keys.length : 0;
-      logInfo("usage fetched", { keys: keyCount });
-      res.json(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logError("usage fetch error", err instanceof Error ? err : new Error(message));
-      res.status(500).json({ error: "Failed to fetch usage: " + message });
+    logInfo("usage stream started", { authed, keys: keys.length });
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+
+    const send = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const prefixes = keys.map(k => keyPreview(k));
+    send("init", { prefixes });
+
+    let aborted = false;
+    req.on("close", () => { aborted = true; });
+    let fetched = 0; let errors = 0;
+
+    for (let i = 0; i < keys.length; i++) {
+      if (aborted) break;
+
+      const apiKey = keys[i];
+      const prefix = prefixes[i];
+
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (aborted) break;
+      }
+
+      try {
+        const fetchRes = await fetch(TAVILY_API_BASE + "/usage", {
+          method: "GET",
+          headers: { Authorization: "Bearer " + apiKey },
+        });
+
+        if (!fetchRes.ok) {
+          const text = await fetchRes.text();
+          errors++;
+          logError("usage stream key error", new Error(`HTTP ${fetchRes.status} for ${prefix}`));
+          send("usage", { prefix, error: `HTTP ${fetchRes.status}: ${text.slice(0, 200)}` });
+          continue;
+        }
+
+        const data = await fetchRes.json() as { key?: Record<string, unknown>; account?: Record<string, unknown> };
+        fetched++;
+        logInfo("usage stream key fetched", { prefix, key: keyPreview(apiKey) });
+        send("usage", { prefix, data: { key: data.key || null, account: data.account || null } });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors++;
+        logError("usage stream key error", err instanceof Error ? err : new Error(message));
+        send("usage", { prefix, error: message });
+      }
     }
+
+    if (!aborted) {
+      logInfo("usage stream done", { total: keys.length, fetched, errors });
+      send("done", { fetchedAt: new Date().toISOString() });
+    }
+    res.end();
   });
 
   app.get("/usage", (_req: Request, res: Response) => {
